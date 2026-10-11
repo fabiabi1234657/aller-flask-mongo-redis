@@ -1,6 +1,7 @@
 from flask import Flask, jsonify, request
 from pymongo import MongoClient
 import redis
+import json
 
 app = Flask(__name__)
 
@@ -37,6 +38,9 @@ def calcular_ttl(nombre: str, descripcion: str = "") -> int | None:
 def crear_vehiculo():
     datos = request.get_json()
 
+    if not datos:
+        return jsonify({"error": "Se requiere un cuerpo JSON"}), 400
+
     # Validar campos obligatorios
     campos = ["vehiculo", "categoria", "peso_toneladas", "descripcion"]
     for c in campos:
@@ -63,10 +67,10 @@ def crear_vehiculo():
 @app.route("/vehiculos", methods=["GET"])
 def obtener_todos():
     if (en_cache := cache.get("todos_vehiculos")):
-        return jsonify({"origen": "redis", "datos": eval(en_cache)})
+        return jsonify({"origen": "redis", "datos": json.loads(en_cache)})
 
     lista = list(vehiculos_col.find({}, {"_id": 0}))
-    cache.set("todos_vehiculos", str(lista), ex=120)   # 2 minutos
+    cache.set("todos_vehiculos", json.dumps(lista), ex=120)   # 2 minutos
     return jsonify({"origen": "mongo", "datos": lista})
 
 
@@ -74,7 +78,7 @@ def obtener_todos():
 def obtener_uno(nombre):
     clave = f"vehiculo:{nombre}"
     if (en_cache := cache.get(clave)):
-        return jsonify({"origen": "redis", "datos": eval(en_cache)})
+        return jsonify({"origen": "redis", "datos": json.loads(en_cache)})
 
     vehiculo = vehiculos_col.find_one({"vehiculo": nombre}, {"_id": 0})
     if not vehiculo:
@@ -83,7 +87,7 @@ def obtener_uno(nombre):
     # TTL dinámico según reglas del taller
     ttl = calcular_ttl(nombre, vehiculo.get("descripcion", ""))
     if ttl is not None:
-        cache.set(clave, str(vehiculo), ex=ttl)
+        cache.set(clave, json.dumps(vehiculo), ex=ttl)
         origen_info = f"mongo → guardado en redis {ttl}s"
     else:
         origen_info = "mongo → sin caché (descripción > 20 caracteres)"
@@ -97,6 +101,9 @@ def obtener_uno(nombre):
 @app.route("/vehiculos/<nombre>", methods=["PUT"])
 def actualizar_vehiculo(nombre):
     datos = request.get_json()
+
+    if not datos:
+        return jsonify({"error": "Se requiere un cuerpo JSON"}), 400
 
     resultado = vehiculos_col.update_one(
         {"vehiculo": nombre},
@@ -129,6 +136,19 @@ def eliminar_vehiculo(nombre):
     cache.delete("todos_vehiculos")
 
     return jsonify({"mensaje": f"'{nombre}' eliminado correctamente"})
+
+
+# ============================================================
+# GET /debug/cache  →  Ver estado actual de Redis (solo para pruebas)
+# ============================================================
+@app.route("/debug/cache", methods=["GET"])
+def debug_cache():
+    claves = cache.keys("*")
+    estado = {}
+    for clave in claves:
+        ttl_restante = cache.ttl(clave)
+        estado[clave] = {"ttl_restante_segundos": ttl_restante}
+    return jsonify({"claves_en_redis": estado, "total": len(claves)})
 
 
 # ─────────────────────────────────────────────────────────────
