@@ -1,3 +1,4 @@
+import json
 from flask import Flask, jsonify, request
 from pymongo import MongoClient
 import redis
@@ -12,6 +13,20 @@ vehiculos_col = db_mongo["vehiculos"]
 # ── CONEXIÓN A REDIS ─────────────────────────────────────────────────────────
 # db=3 para separarlo de otros ejercicios
 cache = redis.Redis(host="localhost", port=6379, db=3, decode_responses=True)
+
+LISTA_KEY = "todos_vehiculos"
+
+
+def ttl_para(nombre: str) -> int:
+    """Calcula el TTL en segundos según la longitud del campo vehiculo."""
+    n = len(nombre)
+    if n <= 5:
+        return 15
+    elif n <= 10:
+        return 20
+    else:
+        return 40
+
 
 # ============================================================
 # POST /vehiculos   →  Registrar un nuevo vehículo
@@ -34,36 +49,51 @@ def crear_vehiculo():
     datos.pop("_id", None)
 
     # Invalidar caché de la lista general
-    cache.delete("todos_vehiculos")
+    cache.delete(LISTA_KEY)
 
     return jsonify({"mensaje": "Vehículo creado", "datos": datos}), 201
 
 
 # ============================================================
-# GET /vehiculos           →  Listar todos  (caché 120 seg)
-# GET /vehiculos/<nombre>  →  Buscar uno    (caché  60 seg)
+# GET /vehiculos  →  Listar todos  (caché 120 seg)
 # ============================================================
 @app.route("/vehiculos", methods=["GET"])
 def obtener_todos():
-    if (en_cache := cache.get("todos_vehiculos")):
-        return jsonify({"origen": "redis", "datos": eval(en_cache)})
+    en_cache = cache.get(LISTA_KEY)
+    if en_cache:
+        return jsonify({"origen": "redis", "datos": json.loads(en_cache)})
 
     lista = list(vehiculos_col.find({}, {"_id": 0}))
-    cache.set("todos_vehiculos", str(lista), ex=120)   # 2 minutos
+    cache.set(LISTA_KEY, json.dumps(lista, ensure_ascii=False), ex=120)
     return jsonify({"origen": "mongo", "datos": lista})
 
 
+# ============================================================
+# GET /vehiculos/<nombre>  →  Buscar uno
+# TTL depende de la longitud del campo vehiculo:
+#   ≤5 chars  → 15 s
+#   6-10      → 20 s
+#   >10       → 40 s
+# Si descripcion > 20 chars → no se guarda en Redis
+# ============================================================
 @app.route("/vehiculos/<nombre>", methods=["GET"])
 def obtener_uno(nombre):
     clave = f"vehiculo:{nombre}"
-    if (en_cache := cache.get(clave)):
-        return jsonify({"origen": "redis", "datos": eval(en_cache)})
+
+    en_cache = cache.get(clave)
+    if en_cache:
+        return jsonify({"origen": "redis", "datos": json.loads(en_cache)})
 
     vehiculo = vehiculos_col.find_one({"vehiculo": nombre}, {"_id": 0})
     if not vehiculo:
         return jsonify({"error": "Vehículo no encontrado"}), 404
 
-    cache.set(clave, str(vehiculo), ex=60)             # 1 minuto
+    # Regla prioritaria: descripcion > 20 chars → no cachear
+    descripcion = vehiculo.get("descripcion", "")
+    if len(descripcion) <= 20:
+        ttl = ttl_para(nombre)
+        cache.set(clave, json.dumps(vehiculo, ensure_ascii=False), ex=ttl)
+
     return jsonify({"origen": "mongo", "datos": vehiculo})
 
 
@@ -82,9 +112,9 @@ def actualizar_vehiculo(nombre):
     if resultado.matched_count == 0:
         return jsonify({"error": "Vehículo no encontrado"}), 404
 
-    # Limpiar caché del vehículo y de la lista
+    # Invalidar caché individual y lista general
     cache.delete(f"vehiculo:{nombre}")
-    cache.delete("todos_vehiculos")
+    cache.delete(LISTA_KEY)
 
     actualizado = vehiculos_col.find_one({"vehiculo": nombre}, {"_id": 0})
     return jsonify({"mensaje": "Vehículo actualizado", "datos": actualizado})
@@ -100,11 +130,27 @@ def eliminar_vehiculo(nombre):
     if resultado.deleted_count == 0:
         return jsonify({"error": "Vehículo no encontrado"}), 404
 
-    # Limpiar caché
+    # Invalidar caché individual y lista general
     cache.delete(f"vehiculo:{nombre}")
-    cache.delete("todos_vehiculos")
+    cache.delete(LISTA_KEY)
 
     return jsonify({"mensaje": f"'{nombre}' eliminado correctamente"})
+
+
+# ============================================================
+# GET /debug/cache/<nombre>  →  Ver estado de caché Redis
+# ============================================================
+@app.route("/debug/cache/<nombre>", methods=["GET"])
+def debug_cache(nombre):
+    clave = f"vehiculo:{nombre}"
+    ttl   = cache.ttl(clave)       # -2 = no existe, -1 = sin expiración, ≥0 = segundos restantes
+    existe = ttl >= 0
+
+    return jsonify({
+        "clave":     clave,
+        "en_cache":  existe,
+        "ttl_segundos": ttl if existe else None
+    })
 
 
 # ─────────────────────────────────────────────────────────────
