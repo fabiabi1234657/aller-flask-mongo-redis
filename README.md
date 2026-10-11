@@ -4,6 +4,8 @@ API REST desarrollada con Flask, MongoDB y Redis para gestión de vehículos.
 
 ## Integrantes
 - Jorge (ITP - Universidad del Putumayo)
+- Fabian Andres Coral (uniputumayo)
+- Cristian Esteban Pinchao Hernandez (uniputumayo)
 
 ---
 
