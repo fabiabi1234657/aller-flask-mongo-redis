@@ -116,9 +116,11 @@ El TTL se calcula a partir del número de caracteres del campo que identifica al
 
 | Condición (longitud del nombre) | Tiempo de expiración (TTL) | Ejemplo de vehículo |
 |---------------------------------|----------------------------|---------------------|
-| **5 caracteres o menos**        | **15 segundos**            | `Tren` (4), `Barco` (5), `Avión` (5) |
-| **Más de 5 y hasta 10 caracteres** | **20 segundos**         | `Camión` (6), `Lancha` (6), `Automóvil` (9) |
+| **5 caracteres o menos**        | **15 segundos**            | `Tren` (4), `Canoa` (5) |
+| **Más de 5 y hasta 10 caracteres** | **20 segundos**         | `Velero` (6), `Furgoneta` (9) |
 | **Más de 10 caracteres**        | **40 segundos**            | `Motocicleta` (11), `Helicóptero` (11) |
+
+> **Nota:** todos los vehículos de `cargar_vehiculos.js` tienen descripción de más de 20 caracteres, por lo que **no se guardan en caché** (regla B). Para demostrar los TTL se deben crear vehículos nuevos con descripción de 20 caracteres o menos (ver pruebas de la sección 7).
 
 ### B. Regla Prioritaria (Longitud de la Descripción)
 > **Condición:** Si el campo `descripcion` tiene **más de 20 caracteres**, el vehículo **NO se almacena en caché** en Redis. Siempre se consulta directamente en MongoDB y responde con `"origen": "mongo"`. Esta regla tiene prioridad absoluta sobre las reglas de TTL.
@@ -138,7 +140,7 @@ El TTL se calcula a partir del número de caracteres del campo que identifica al
 | Método | Endpoint | Descripción | Comportamiento Caché |
 |--------|----------|-------------|----------------------|
 | `POST` | `/vehiculos` | Registrar un nuevo vehículo | Invalida `todos_vehiculos` |
-| `GET` | `/vehiculos` | Listar todos los vehículos | Guarda lista por 120s (`origen: redis/mongo`) |
+| `GET` | `/vehiculos` | Listar todos los vehículos | Sin caché (siempre `origen: mongo`) |
 | `GET` | `/vehiculos/<nombre>` | Consultar un vehículo por nombre | Aplica reglas de TTL (15s, 20s, 40s) o exclusión si desc > 20 |
 | `PUT` | `/vehiculos/<nombre>` | Actualizar información de un vehículo | Invalida caché del vehículo y lista general |
 | `DELETE` | `/vehiculos/<nombre>` | Eliminar un vehículo | Invalida caché del vehículo y lista general |
@@ -170,20 +172,20 @@ El TTL se calcula a partir del número de caracteres del campo que identifica al
 ---
 
 ### Prueba 2: TTL de 20 segundos (Nombre entre 6 y 10 caracteres, Descripción ≤ 20 caracteres)
-1. **Crear o actualizar vehículo:** `POST http://127.0.0.1:5000/vehiculos`
+1. **Crear vehículo:** `POST http://127.0.0.1:5000/vehiculos`
    ```json
    {
-     "vehiculo": "Lancha",
+     "vehiculo": "Velero",
      "categoria": "Acuático",
      "peso_toneladas": 2,
-     "descripcion": "Ríos y lagos"
+     "descripcion": "Navega con viento"
    }
    ```
-   *(Nombre "Lancha" = 6 caracteres; descripción = 12 caracteres ≤ 20)*
-2. **Consultar:** `GET http://127.0.0.1:5000/vehiculos/Lancha`
+   *(Nombre "Velero" = 6 caracteres; descripción = 17 caracteres ≤ 20)*
+2. **Consultar:** `GET http://127.0.0.1:5000/vehiculos/Velero`
    - 1ª vez: `"origen": "mongo"` (almacena en Redis con TTL de 20s).
    - 2ª vez: `"origen": "redis"`.
-3. **Verificar en debug:** `GET http://127.0.0.1:5000/debug/cache/Lancha`
+3. **Verificar en debug:** `GET http://127.0.0.1:5000/debug/cache/Velero`
    - Muestra `ttl_segundos` iniciando en 20s.
 
 ---

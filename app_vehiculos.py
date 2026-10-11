@@ -58,16 +58,11 @@ def crear_vehiculo():
 
 
 # ============================================================
-# GET /vehiculos  →  Listar todos  (caché 120 seg)
+# GET /vehiculos  →  Listar todos  (siempre desde MongoDB, sin caché)
 # ============================================================
 @app.route("/vehiculos", methods=["GET"])
 def obtener_todos():
-    en_cache = cache.get(LISTA_KEY)
-    if en_cache:
-        return jsonify({"origen": "redis", "datos": json.loads(en_cache)})
-
     lista = list(vehiculos_col.find({}, {"_id": 0}))
-    cache.set(LISTA_KEY, json.dumps(lista, ensure_ascii=False), ex=120)
     return jsonify({"origen": "mongo", "datos": lista})
 
 
