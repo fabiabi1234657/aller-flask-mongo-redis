@@ -6,7 +6,7 @@ import redis
 app = Flask(__name__)
 
 # ── CONEXIÓN A MONGODB ───────────────────────────────────────────────────────
-mongo_client  = MongoClient("mongodb://localhost:27017")
+mongo_client  = MongoClient("mongodb://localhost:27017", serverSelectionTimeoutMS=2000)
 db_mongo      = mongo_client["automoviles"]
 vehiculos_col = db_mongo["vehiculos"]
 
@@ -159,6 +159,27 @@ def debug_cache(nombre):
         "en_cache":  existe,
         "ttl_segundos": ttl if existe else None
     })
+
+
+# ============================================================
+# GET /health  →  Estado de MongoDB y Redis
+# ============================================================
+@app.route("/health", methods=["GET"])
+def health():
+    estado = {}
+    try:
+        mongo_client.admin.command("ping")
+        estado["mongo"] = "ok"
+    except Exception as e:
+        estado["mongo"] = f"error: {e}"
+    try:
+        cache.ping()
+        estado["redis"] = "ok"
+    except Exception as e:
+        estado["redis"] = f"error: {e}"
+
+    codigo = 200 if all(v == "ok" for v in estado.values()) else 503
+    return jsonify(estado), codigo
 
 
 # ─────────────────────────────────────────────────────────────

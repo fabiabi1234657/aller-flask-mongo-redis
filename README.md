@@ -145,6 +145,7 @@ El TTL se calcula a partir del número de caracteres del campo que identifica al
 | `PUT` | `/vehiculos/<nombre>` | Actualizar información de un vehículo | Invalida caché del vehículo y lista general |
 | `DELETE` | `/vehiculos/<nombre>` | Eliminar un vehículo | Invalida caché del vehículo y lista general |
 | `GET` | `/debug/cache/<nombre>` | Inspeccionar estado de caché y TTL restante | Consulta directa a Redis (`ttl` y `en_cache`) |
+| `GET` | `/health` | Verificar conexión con MongoDB y Redis | Responde `{"mongo": "ok", "redis": "ok"}` (200) o el error con código 503 |
 
 ---
 
