@@ -34,12 +34,14 @@ def ttl_para(nombre: str) -> int:
 @app.route("/vehiculos", methods=["POST"])
 def crear_vehiculo():
     datos = request.get_json()
+    if not datos:
+        return jsonify({"error": "Cuerpo de solicitud JSON no proporcionado"}), 400
 
     # Validar campos obligatorios
     campos = ["vehiculo", "categoria", "peso_toneladas", "descripcion"]
     for c in campos:
         if c not in datos:
-            return jsonify({"error": f"Falta el campo: {c}"}), 400
+            return jsonify({"error": f"Falta el campo obligatorio: {c}"}), 400
 
     # Verificar que no exista ya
     if vehiculos_col.find_one({"vehiculo": datos["vehiculo"]}):
@@ -48,8 +50,9 @@ def crear_vehiculo():
     vehiculos_col.insert_one(datos)
     datos.pop("_id", None)
 
-    # Invalidar caché de la lista general
+    # Invalidar caché de la lista general y de la clave individual
     cache.delete(LISTA_KEY)
+    cache.delete(f"vehiculo:{datos['vehiculo']}")
 
     return jsonify({"mensaje": "Vehículo creado", "datos": datos}), 201
 
@@ -70,11 +73,12 @@ def obtener_todos():
 
 # ============================================================
 # GET /vehiculos/<nombre>  →  Buscar uno
-# TTL depende de la longitud del campo vehiculo:
-#   ≤5 chars  → 15 s
-#   6-10      → 20 s
-#   >10       → 40 s
-# Si descripcion > 20 chars → no se guarda en Redis
+# Reglas de caché según especificación del taller:
+#   1. Regla prioritaria: Si descripcion > 20 caracteres → NO almacenar en caché
+#   2. Si descripcion <= 20 caracteres:
+#        - Longitud del nombre <= 5 chars  → TTL = 15 s
+#        - Longitud del nombre 6 a 10 chars → TTL = 20 s
+#        - Longitud del nombre > 10 chars  → TTL = 40 s
 # ============================================================
 @app.route("/vehiculos/<nombre>", methods=["GET"])
 def obtener_uno(nombre):
@@ -88,10 +92,11 @@ def obtener_uno(nombre):
     if not vehiculo:
         return jsonify({"error": "Vehículo no encontrado"}), 404
 
-    # Regla prioritaria: descripcion > 20 chars → no cachear
-    descripcion = vehiculo.get("descripcion", "")
+    # Regla prioritaria: descripcion > 20 chars → no almacenar en Redis
+    descripcion = str(vehiculo.get("descripcion") or "")
     if len(descripcion) <= 20:
-        ttl = ttl_para(nombre)
+        nombre_real = str(vehiculo.get("vehiculo") or nombre)
+        ttl = ttl_para(nombre_real)
         cache.set(clave, json.dumps(vehiculo, ensure_ascii=False), ex=ttl)
 
     return jsonify({"origen": "mongo", "datos": vehiculo})
@@ -103,6 +108,11 @@ def obtener_uno(nombre):
 @app.route("/vehiculos/<nombre>", methods=["PUT"])
 def actualizar_vehiculo(nombre):
     datos = request.get_json()
+    if not datos:
+        return jsonify({"error": "Cuerpo de solicitud JSON no proporcionado"}), 400
+
+    # Evitar modificar el _id de MongoDB
+    datos.pop("_id", None)
 
     resultado = vehiculos_col.update_one(
         {"vehiculo": nombre},
@@ -114,9 +124,12 @@ def actualizar_vehiculo(nombre):
 
     # Invalidar caché individual y lista general
     cache.delete(f"vehiculo:{nombre}")
+    if "vehiculo" in datos and datos["vehiculo"] != nombre:
+        cache.delete(f"vehiculo:{datos['vehiculo']}")
     cache.delete(LISTA_KEY)
 
-    actualizado = vehiculos_col.find_one({"vehiculo": nombre}, {"_id": 0})
+    nombre_actual = datos.get("vehiculo", nombre)
+    actualizado = vehiculos_col.find_one({"vehiculo": nombre_actual}, {"_id": 0})
     return jsonify({"mensaje": "Vehículo actualizado", "datos": actualizado})
 
 

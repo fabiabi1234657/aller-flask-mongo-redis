@@ -1,230 +1,251 @@
-# Taller Flask + MongoDB + Redis
+# Taller: API REST con Flask, MongoDB y Redis (Cache-Aside)
 
-API REST desarrollada con Flask, MongoDB y Redis para gestión de vehículos.
+API REST desarrollada con **Flask**, **MongoDB** y **Redis** para la gestión de vehículos con un sistema de almacenamiento en caché bajo el patrón **Cache-Aside**, aplicando tiempos de expiración (TTL) dinámicos e invalidación de caché ante modificaciones.
+
+---
 
 ## Integrantes
-- Jorge (ITP - Universidad del Putumayo)
-- Fabian Andres Coral (uniputumayo)
-- Cristian Esteban Pinchao Hernandez (uniputumayo)
+- **Jorge William Termal** (ITP - Universidad del Putumayo)
+- **Fabian Andres Coral Garcia** (ITP - Universidad del Putumayo)
+- **Cristian Esteban Pinchao Hernandez** (ITP - Universidad del Putumayo)
+
+**Docente:** Fredy Jacanamijoy  
+**Asignatura:** Bases de Datos No Relacionales — Semestre 7 (Nocturna)
 
 ---
 
 ## Requisitos previos
-- Python 3.x instalado
-- MongoDB corriendo en `localhost:27017`
-- Redis corriendo en `localhost:6379`
+- **Python 3.10+** instalado
+- **MongoDB** corriendo en `localhost:27017`
+- **Redis** corriendo en `localhost:6379`
   - En WSL Ubuntu: `sudo service redis-server start`
-  - Verificar con: `redis-cli ping` → debe responder `PONG`
+  - En Windows / Docker: servicio de Redis activo
+  - Verificar conexión con: `redis-cli ping` → debe responder `PONG`
 
 ---
 
-## 1. Instalar dependencias
+## 1. Instalación de dependencias
+
+El proyecto incluye el archivo `requirements.txt` con todas las dependencias necesarias:
 
 ```bash
-# Clonar el repositorio (si no lo tienes)
-git clone https://github.com/jhorch1/aller-flask-mongo-redis.git
+# 1. Clonar el repositorio
+git clone https://github.com/fabiabi1234657/aller-flask-mongo-redis.git
 cd aller-flask-mongo-redis
 
-# Crear y activar entorno virtual
+# 2. Crear y activar entorno virtual (opcional pero recomendado)
 python -m venv env
-env\Scripts\activate        # Windows
-# source env/bin/activate   # Linux/Mac
+# En Windows:
+env\Scripts\activate
+# En Linux/Mac:
+# source env/bin/activate
 
-# Instalar dependencias desde requirements.txt
+# 3. Instalar librerías
 pip install -r requirements.txt
 ```
 
+Contenido de `requirements.txt`:
+- `Flask`: Framework web para la API REST.
+- `pymongo`: Controlador oficial de MongoDB para Python.
+- `redis`: Cliente oficial de Redis para Python.
+
 ---
 
-## 2. Iniciar MongoDB
+## 2. Iniciar Servicios (MongoDB y Redis)
 
+### MongoDB
 ```bash
-# Windows: iniciar el servicio (si no está corriendo)
+# Windows (como Administrador si está como servicio):
 net start MongoDB
 
-# Verificar en mongosh
+# O verificar en mongosh:
 mongosh
 > show dbs
 ```
 
----
-
-## 3. Iniciar Redis
-
+### Redis
 ```bash
-# En WSL Ubuntu
+# En WSL Ubuntu:
 sudo service redis-server start
 
-# Verificar
+# Verificar:
 redis-cli ping
-# Debe responder: PONG
+# Respuesta esperada: PONG
 ```
 
 ---
 
-## 4. Cargar los vehículos iniciales en MongoDB
+## 3. Cargar datos iniciales en MongoDB
 
-Abrir `mongosh` y ejecutar el script:
+Ejecutar el script `cargar_vehiculos.js` dentro de la consola `mongosh`:
 
 ```js
 load("cargar_vehiculos.js")
 ```
 
-O bien, dentro de mongosh paso a paso:
-
+O verificar los datos cargados:
 ```js
-use("automoviles")
+use automoviles
 db.vehiculos.find().pretty()
 ```
 
 ---
 
-## 5. Ejecutar Flask
+## 4. Ejecución de la API REST
 
+Para iniciar la aplicación Flask:
+
+```bash
+python app_vehiculos.py
+```
+O con el CLI de Flask:
 ```bash
 flask --app app_vehiculos run
 ```
 
-La API queda disponible en `http://127.0.0.1:5000`
+La API quedará escuchando en `http://127.0.0.1:5000`.
 
 ---
 
-## 6. Endpoints disponibles
+## 5. Reglas de Caché con Redis (Especificación del Taller)
 
-| Método | URL | Descripción |
-|--------|-----|-------------|
-| POST   | `/vehiculos` | Registrar nuevo vehículo |
-| GET    | `/vehiculos` | Listar todos los vehículos |
-| GET    | `/vehiculos/<nombre>` | Buscar un vehículo por nombre |
-| PUT    | `/vehiculos/<nombre>` | Actualizar un vehículo |
-| DELETE | `/vehiculos/<nombre>` | Eliminar un vehículo |
-| GET    | `/debug/cache/<nombre>` | Ver estado de caché Redis |
+El sistema utiliza **Redis** (base de datos lógica `db=3`) como caché en memoria bajo las siguientes reglas oficiales:
 
----
+### A. Tiempos de Expiración (TTL) Dinámicos
+El TTL se calcula a partir del número de caracteres del campo que identifica al vehículo (`vehiculo`):
 
-## 7. Probar cada endpoint en Postman
+| Condición (longitud del nombre) | Tiempo de expiración (TTL) | Ejemplo de vehículo |
+|---------------------------------|----------------------------|---------------------|
+| **5 caracteres o menos**        | **15 segundos**            | `Tren` (4), `Barco` (5), `Avión` (5) |
+| **Más de 5 y hasta 10 caracteres** | **20 segundos**         | `Camión` (6), `Lancha` (6), `Automóvil` (9) |
+| **Más de 10 caracteres**        | **40 segundos**            | `Motocicleta` (11), `Helicóptero` (11) |
 
-### POST /vehiculos — Crear vehículo
-- **Método:** POST  
-- **URL:** `http://127.0.0.1:5000/vehiculos`  
-- **Body (JSON):**
-```json
-{
-  "vehiculo": "Tren",
-  "categoria": "Terrestre (motorizado)",
-  "peso_toneladas": 500,
-  "descripcion": "Corta"
-}
-```
+### B. Regla Prioritaria (Longitud de la Descripción)
+> **Condición:** Si el campo `descripcion` tiene **más de 20 caracteres**, el vehículo **NO se almacena en caché** en Redis. Siempre se consulta directamente en MongoDB y responde con `"origen": "mongo"`. Esta regla tiene prioridad absoluta sobre las reglas de TTL.
+
+### C. Serialización Segura (JSON Seguro)
+- Se sustituyó el uso inseguro de `eval()` y `str()` por `json.dumps()` para almacenar en Redis y `json.loads()` para recuperar desde Redis.
+- Se gestiona la exclusión de `_id` (`{"_id": 0}`) para garantizar compatibilidad total con el formato JSON estándar.
+
+### D. Invalidación de Caché
+- Al **actualizar (`PUT`)** o **eliminar (`DELETE`)** un vehículo, se elimina automáticamente su clave individual en Redis (`vehiculo:<nombre>`) y la clave de la lista general (`todos_vehiculos`).
+- Al **crear (`POST`)** un vehículo, se invalida la lista general en Redis para mantener los datos sincronizados.
 
 ---
 
-### GET /vehiculos — Listar todos
-- **Método:** GET  
-- **URL:** `http://127.0.0.1:5000/vehiculos`  
-- Primera llamada → `"origen": "mongo"` (consulta MongoDB y guarda en Redis 120 s)  
-- Segunda llamada → `"origen": "redis"` (responde desde caché)
+## 6. Endpoints Disponibles
+
+| Método | Endpoint | Descripción | Comportamiento Caché |
+|--------|----------|-------------|----------------------|
+| `POST` | `/vehiculos` | Registrar un nuevo vehículo | Invalida `todos_vehiculos` |
+| `GET` | `/vehiculos` | Listar todos los vehículos | Guarda lista por 120s (`origen: redis/mongo`) |
+| `GET` | `/vehiculos/<nombre>` | Consultar un vehículo por nombre | Aplica reglas de TTL (15s, 20s, 40s) o exclusión si desc > 20 |
+| `PUT` | `/vehiculos/<nombre>` | Actualizar información de un vehículo | Invalida caché del vehículo y lista general |
+| `DELETE` | `/vehiculos/<nombre>` | Eliminar un vehículo | Invalida caché del vehículo y lista general |
+| `GET` | `/debug/cache/<nombre>` | Inspeccionar estado de caché y TTL restante | Consulta directa a Redis (`ttl` y `en_cache`) |
 
 ---
 
-### GET /vehiculos/<nombre> — Buscar uno
-- **Método:** GET  
-- **URL:** `http://127.0.0.1:5000/vehiculos/Tren`  
-- Primera llamada → `"origen": "mongo"`  
-- Segunda llamada → `"origen": "redis"`
+## 7. Guía de Pruebas y Demostración en Postman
+
+### Prueba 1: TTL de 15 segundos (Nombre ≤ 5 caracteres, Descripción ≤ 20 caracteres)
+1. **Crear vehículo:** `POST http://127.0.0.1:5000/vehiculos`
+   ```json
+   {
+     "vehiculo": "Tren",
+     "categoria": "Terrestre (motorizado)",
+     "peso_toneladas": 500,
+     "descripcion": "Corta"
+   }
+   ```
+2. **Primera consulta:** `GET http://127.0.0.1:5000/vehiculos/Tren`
+   - Responde: `"origen": "mongo"` (y lo guarda en Redis con TTL de 15 segundos).
+3. **Segunda consulta inmediata:** `GET http://127.0.0.1:5000/vehiculos/Tren`
+   - Responde: `"origen": "redis"`.
+4. **Verificar TTL restante:** `GET http://127.0.0.1:5000/debug/cache/Tren`
+   - Responde: `{"en_cache": true, "ttl_segundos": 13}`.
+5. **Esperar 15 segundos y volver a consultar:**
+   - Responde: `"origen": "mongo"` (el registro expiró automáticamente en Redis).
 
 ---
 
-### PUT /vehiculos/<nombre> — Actualizar
-- **Método:** PUT  
-- **URL:** `http://127.0.0.1:5000/vehiculos/Tren`  
-- **Body (JSON):**
-```json
-{
-  "peso_toneladas": 600
-}
-```
+### Prueba 2: TTL de 20 segundos (Nombre entre 6 y 10 caracteres, Descripción ≤ 20 caracteres)
+1. **Crear o actualizar vehículo:** `POST http://127.0.0.1:5000/vehiculos`
+   ```json
+   {
+     "vehiculo": "Lancha",
+     "categoria": "Acuático",
+     "peso_toneladas": 2,
+     "descripcion": "Ríos y lagos"
+   }
+   ```
+   *(Nombre "Lancha" = 6 caracteres; descripción = 12 caracteres ≤ 20)*
+2. **Consultar:** `GET http://127.0.0.1:5000/vehiculos/Lancha`
+   - 1ª vez: `"origen": "mongo"` (almacena en Redis con TTL de 20s).
+   - 2ª vez: `"origen": "redis"`.
+3. **Verificar en debug:** `GET http://127.0.0.1:5000/debug/cache/Lancha`
+   - Muestra `ttl_segundos` iniciando en 20s.
 
 ---
 
-### DELETE /vehiculos/<nombre> — Eliminar
-- **Método:** DELETE  
-- **URL:** `http://127.0.0.1:5000/vehiculos/Tren`
+### Prueba 3: TTL de 40 segundos (Nombre > 10 caracteres, Descripción ≤ 20 caracteres)
+1. **Crear vehículo:** `POST http://127.0.0.1:5000/vehiculos`
+   ```json
+   {
+     "vehiculo": "Motocicleta",
+     "categoria": "Terrestre (motorizado)",
+     "peso_toneladas": 0.2,
+     "descripcion": "Dos ruedas"
+   }
+   ```
+   *(Nombre "Motocicleta" = 11 caracteres; descripción = 10 caracteres ≤ 20)*
+2. **Consultar:** `GET http://127.0.0.1:5000/vehiculos/Motocicleta`
+   - 1ª vez: `"origen": "mongo"` (almacena en Redis con TTL de 40s).
+   - 2ª vez: `"origen": "redis"`.
+3. **Verificar en debug:** `GET http://127.0.0.1:5000/debug/cache/Motocicleta`
+   - Muestra `ttl_segundos` iniciando en 40s.
 
 ---
 
-### GET /debug/cache/<nombre> — Ver caché
-- **Método:** GET  
-- **URL:** `http://127.0.0.1:5000/debug/cache/Tren`  
-- Respuesta si está en caché:
-```json
-{
-  "clave": "vehiculo:Tren",
-  "en_cache": true,
-  "ttl_segundos": 13
-}
-```
-- Respuesta si no está:
-```json
-{
-  "clave": "vehiculo:Tren",
-  "en_cache": false,
-  "ttl_segundos": null
-}
-```
+### Prueba 4: Regla Prioritaria — Descripción > 20 caracteres (NO se guarda en Redis)
+1. **Consultar cualquier vehículo con descripción larga**, por ejemplo el `Automóvil` cargado inicialmente desde `cargar_vehiculos.js` (cuya descripción es `"Vehículo común para transporte personal."`, con 41 caracteres):
+   - `GET http://127.0.0.1:5000/vehiculos/Automóvil`
+2. **Respuesta 1ª llamada:** `"origen": "mongo"`.
+3. **Respuesta 2ª llamada inmediata:** `"origen": "mongo"`.
+4. **Verificar en debug:** `GET http://127.0.0.1:5000/debug/cache/Automóvil`
+   ```json
+   {
+     "clave": "vehiculo:Automóvil",
+     "en_cache": false,
+     "ttl_segundos": null
+   }
+   ```
+   > Demuestra que la condición de descripción superior a 20 caracteres tiene prioridad y bloquea el guardado en Redis.
 
 ---
 
-## 8. Demostrar Redis — origen mongo, origen redis y expiración
-
-### Paso 1 — Primera consulta (origen: mongo)
-```
-GET http://127.0.0.1:5000/vehiculos/Avión
-```
-→ Responde `"origen": "mongo"` y guarda en Redis con TTL de 20 s ("Avión" = 5 chars sin tilde / 6 con tilde).
-
-### Paso 2 — Segunda consulta inmediata (origen: redis)
-```
-GET http://127.0.0.1:5000/vehiculos/Avión
-```
-→ Responde `"origen": "redis"`.
-
-### Paso 3 — Ver TTL en tiempo real
-```
-GET http://127.0.0.1:5000/debug/cache/Avión
-```
-→ Muestra `"ttl_segundos": 17` (o el tiempo que reste).
-
-### Paso 4 — Esperar a que expire y volver a consultar
-Después de que el TTL llega a 0:
-```
-GET http://127.0.0.1:5000/vehiculos/Avión
-```
-→ Vuelve a responder `"origen": "mongo"` (caché expirada).
+### Prueba 5: Invalidación de Caché al Modificar (PUT) y Eliminar (DELETE)
+1. Con `Tren` en caché (`"origen": "redis"`):
+2. **Modificar:** `PUT http://127.0.0.1:5000/vehiculos/Tren`
+   ```json
+   {
+     "peso_toneladas": 600
+   }
+   ```
+3. **Consultar inmediatamente:** `GET http://127.0.0.1:5000/vehiculos/Tren`
+   - Responde: `"origen": "mongo"`, demostrando que la caché fue eliminada tras la actualización para evitar datos obsoletos.
+4. **Eliminar:** `DELETE http://127.0.0.1:5000/vehiculos/Tren`
+   - Elimina de MongoDB y borra cualquier rastro en Redis.
 
 ---
 
-## 9. Lógica de caché Redis
-
-| Campo `vehiculo` (longitud) | TTL individual |
-|-----------------------------|---------------|
-| ≤ 5 caracteres              | 15 segundos   |
-| 6 – 10 caracteres           | 20 segundos   |
-| > 10 caracteres             | 40 segundos   |
-
-**Regla prioritaria:** Si `descripcion` tiene más de 20 caracteres, el vehículo **no se guarda en Redis** (siempre responde desde MongoDB).
-
-La caché de la lista general (`GET /vehiculos`) dura **120 segundos**.
-
----
-
-## Estructura del proyecto
+## 8. Estructura del Repositorio
 
 ```
 aller-flask-mongo-redis/
-├── app_vehiculos.py       # API REST principal
-├── cargar_vehiculos.js    # Script para poblar MongoDB
-├── requirements.txt       # Dependencias Python
-├── .gitignore
-└── README.md
+├── app_vehiculos.py       # API REST con endpoints CRUD y lógica de Redis
+├── cargar_vehiculos.js    # Script de inicialización para MongoDB
+├── requirements.txt       # Dependencias del proyecto (Flask, pymongo, redis)
+├── .gitignore             # Archivos excluidos de control de versiones
+└── README.md              # Documentación técnica y guía de pruebas
 ```
