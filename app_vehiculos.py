@@ -5,13 +5,30 @@ import redis
 app = Flask(__name__)
 
 # ── CONEXIÓN A MONGODB ───────────────────────────────────────────────────────
-mongo_client  = MongoClient("mongodb://localhost:27017")
-db_mongo      = mongo_client["automoviles"]
+mongo_client = MongoClient("mongodb://localhost:27017")
+db_mongo     = mongo_client["automoviles"]
 vehiculos_col = db_mongo["vehiculos"]
 
 # ── CONEXIÓN A REDIS ─────────────────────────────────────────────────────────
 # db=3 para separarlo de otros ejercicios
 cache = redis.Redis(host="localhost", port=6379, db=3, decode_responses=True)
+
+
+# ── TTL DINÁMICO SEGÚN LONGITUD DEL NOMBRE ──────────────────────────────────
+# · descripcion > 20 caracteres → sin caché
+# · nombre  ≤ 5 caracteres      → 15 s
+# · nombre  6-10 caracteres     → 20 s
+# · nombre  > 10 caracteres     → 40 s
+def calcular_ttl(nombre: str, descripcion: str = "") -> int | None:
+    if len(descripcion) > 20:
+        return None          # no se guarda en caché
+    if len(nombre) <= 5:
+        return 15
+    elif len(nombre) <= 10:
+        return 20
+    else:
+        return 40
+
 
 # ============================================================
 # POST /vehiculos   →  Registrar un nuevo vehículo
@@ -40,8 +57,8 @@ def crear_vehiculo():
 
 
 # ============================================================
-# GET /vehiculos           →  Listar todos  (caché 120 seg)
-# GET /vehiculos/<nombre>  →  Buscar uno    (caché  60 seg)
+# GET /vehiculos        →  Listar todos  (caché 120 seg)
+# GET /vehiculos/<nombre>  →  Buscar uno  (TTL dinámico)
 # ============================================================
 @app.route("/vehiculos", methods=["GET"])
 def obtener_todos():
@@ -63,8 +80,15 @@ def obtener_uno(nombre):
     if not vehiculo:
         return jsonify({"error": "Vehículo no encontrado"}), 404
 
-    cache.set(clave, str(vehiculo), ex=60)             # 1 minuto
-    return jsonify({"origen": "mongo", "datos": vehiculo})
+    # TTL dinámico según reglas del taller
+    ttl = calcular_ttl(nombre, vehiculo.get("descripcion", ""))
+    if ttl is not None:
+        cache.set(clave, str(vehiculo), ex=ttl)
+        origen_info = f"mongo → guardado en redis {ttl}s"
+    else:
+        origen_info = "mongo → sin caché (descripción > 20 caracteres)"
+
+    return jsonify({"origen": origen_info, "datos": vehiculo})
 
 
 # ============================================================
